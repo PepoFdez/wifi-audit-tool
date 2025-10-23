@@ -1,8 +1,7 @@
 #!/bin/bash
-
 # =====================================================================
-# WiFi Auditing Automation Tool - v2.1 (Bash Edition)
-# Estética mejorada + prompt personalizado + base de datos persistente
+# WiFi Auditing Automation Tool - v3.5
+# Muestra MAC + SSID + VENDOR con caché, APIs y fallback local IEEE
 # =====================================================================
 
 # ---------------------------
@@ -35,7 +34,7 @@ check_root() {
 }
 
 check_dependencies() {
-    local deps=(hcxdumptool hcxpcapngtool hashcat curl)
+    local deps=(hcxdumptool hcxpcapngtool hashcat curl xxd)
     local missing=()
     for dep in "${deps[@]}"; do
         if ! command -v "$dep" &>/dev/null; then
@@ -61,26 +60,26 @@ show_banner() {
         echo -e "${NC}"
     else
         echo -e "${CYAN}╔═════════════════════════════════════════════╗${NC}"
-        echo -e "${CYAN}║${WHITE}     WiFi Auditing Automation Tool v2.2${CYAN}      ║${NC}"
-        echo -e "${CYAN}║${WHITE}     IEEE 802.11 Security Analysis${CYAN}           ║${NC}"
+        echo -e "${CYAN}║${WHITE} WiFi Auditing Automation Tool v3.5${CYAN} ║${NC}"
+        echo -e "${CYAN}║${WHITE} IEEE 802.11 Security Analysis${CYAN}        ║${NC}"
         echo -e "${CYAN}╚═════════════════════════════════════════════╝${NC}"
     fi
 }
 
 # ---------------------------
-# Comando: help
+# Help
 # ---------------------------
 show_help() {
     echo -e "${WHITE}"
     echo "──────────────────────────────────────────────"
     echo "   USO DE COMANDOS DISPONIBLES"
-    echo "──────────────────────────────────────────────"
+    echo "──────────────────────────────────────────────${NC}"
     echo ""
     echo -e "${YELLOW}analyze${NC} ${WHITE}<interfaz> <archivo.pcapng>${NC}"
-    echo "  Captura tráfico WiFi, extrae EAPOL y actualiza la base de datos."
+    echo "  Captura tráfico WiFi y actualiza la base de datos."
     echo ""
     echo -e "${YELLOW}lsmac${NC} [${WHITE}archivo.hc22000${NC}]"
-    echo "  Lista las MACs detectadas. Si se especifica un archivo, solo analiza ese."
+    echo "  Lista las MACs detectadas mostrando SSID y fabricante (por defecto usa database.hc22000)."
     echo ""
     echo -e "${YELLOW}attack${NC} ${WHITE}<mac> <máscara>${NC}"
     echo "  Ejecuta hashcat sobre una MAC específica."
@@ -109,6 +108,7 @@ analyze() {
 
     print_info "Iniciando captura con hcxdumptool en $iface..."
     print_warning "Presiona Ctrl+C para detener."
+
     systemctl stop NetworkManager wpa_supplicant 2>/dev/null
     hcxdumptool -i "$iface" -w "$outfile" -F --rds=1
     systemctl restart NetworkManager wpa_supplicant 2>/dev/null
@@ -122,22 +122,16 @@ analyze() {
     local hcfile="${outfile%.pcapng}.hc22000"
     hcxpcapngtool -o "$hcfile" "$outfile"
 
-    # Guardar en base de datos global
     if [[ -f "$hcfile" ]]; then
         print_info "Actualizando base de datos global..."
         cat "$hcfile" >> "$dbfile"
         sort -u "$dbfile" -o "$dbfile"
         print_success "Base de datos actualizada: $dbfile"
-    else
-        print_error "No se generó correctamente $hcfile."
-        return 1
     fi
-
-    print_success "Captura completada y agregada a la base de datos."
 }
 
 # ---------------------------
-# Lookup vendor (con cache, fallback y local)
+# Lookup vendor (API + cache + fallo local)
 # ---------------------------
 lookup_vendor() {
     local mac="$1"
@@ -154,11 +148,8 @@ lookup_vendor() {
     fi
 
     vendor=""
-
-    # API primaria: macvendors.com
     response=$(curl -s --max-time 3 "https://api.macvendors.com/$mac")
     if [[ "$response" == *"Too Many Requests"* || "$response" == *"<html"* || -z "$response" ]]; then
-        # API secundaria: maclookup.app
         response2=$(curl -s --max-time 3 "https://api.maclookup.app/v2/macs/$mac/company/name")
         if [[ -n "$response2" && "$response2" != *"error"* ]]; then
             vendor="$response2"
@@ -167,7 +158,6 @@ lookup_vendor() {
         vendor="$response"
     fi
 
-    # Si no hay Internet o ambas fallan, consultar base IEEE local (requiere ieee-data)
     if [[ -z "$vendor" || "$vendor" == *"<html"* ]]; then
         if [[ -f "/usr/share/ieee-data/oui.txt" ]]; then
             vendor_local=$(grep -i "^$prefix" /usr/share/ieee-data/oui.txt | awk -F'\t' '{print $3}' | head -n1)
@@ -177,13 +167,12 @@ lookup_vendor() {
         fi
     fi
 
-    # Guardar en cache
     echo "$prefix;$vendor" >> "$cache_file"
     echo "$vendor"
 }
 
 # ---------------------------
-# lsmac
+# lsmac (con SSID + Vendor)
 # ---------------------------
 lsmac() {
     local file="${1:-database.hc22000}"
@@ -194,15 +183,23 @@ lsmac() {
         return 1
     fi
 
-    print_info "Extrayendo MACs desde: $file"
-    declare -A seen
+    print_info "Extrayendo MACs y SSIDs desde: $file"
+    declare -A mac_to_ssid
     local mac_list=()
 
-    while IFS='*' read -r f1 f2 f3 f4 rest; do
+    while IFS='*' read -r f1 f2 f3 f4 f5 f6 rest; do
         [[ -z "$f4" ]] && continue
-        formatted_mac=$(echo "$f4" | sed 's/..../&:/g;s/:$//' | tr '[:lower:]' '[:upper:]' | sed 's/://8')
-        if [[ -n "$formatted_mac" && -z "${seen[$formatted_mac]}" ]]; then
-            seen[$formatted_mac]=1
+        formatted_mac=$(echo "$f4" | sed 's/\\(..\\)/\\1:/g' | sed 's/:$//' | tr '[:lower:]' '[:upper:]')
+
+        if [[ "$f6" =~ ^[0-9A-Fa-f]+$ ]]; then
+            essid=$(echo "$f6" | xxd -r -p 2>/dev/null)
+            [[ -z "$essid" ]] && essid="(oculto)"
+        else
+            essid="(oculto)"
+        fi
+
+        if [[ -z "${mac_to_ssid[$formatted_mac]}" ]]; then
+            mac_to_ssid["$formatted_mac"]="$essid"
             mac_list+=("$formatted_mac")
         fi
     done < "$file"
@@ -212,17 +209,19 @@ lsmac() {
         return
     fi
 
-    printf "%-20s %-50s\n" "MAC ADDRESS" "VENDOR"
-    printf "%-20s %-50s\n" "--------------------" "--------------------------------------------------"
+    printf "%-20s %-30s %-50s\n" "MAC ADDRESS" "SSID" "VENDOR"
+    printf "%-20s %-30s %-50s\n" "--------------------" "------------------------------" "--------------------------------------------------"
 
     for mac in "${mac_list[@]}"; do
+        ssid="${mac_to_ssid[$mac]}"
         vendor=$(lookup_vendor "$mac")
-        printf "%-20s %-50s\n" "$mac" "$vendor"
+        printf "%-20s %-30s %-50s\n" "$mac" "$ssid" "$vendor"
         sleep 1
     done
 
-    print_success "Total de MACs encontradas: ${#mac_list[@]}"
+    print_success "Total de redes encontradas: ${#mac_list[@]}"
 }
+
 # ---------------------------
 # attack
 # ---------------------------
@@ -241,14 +240,15 @@ attack() {
     fi
 
     print_info "Buscando hash correspondiente a $mac..."
-    temp_file="hash_${mac//:/}.hc22000"
+    local temp_file="hash_${mac//:/}.hc22000"
     grep -i "${mac//:/}" "$dbfile" > "$temp_file"
+
     if [[ ! -s "$temp_file" ]]; then
-        print_error "No se encontró ningún hash para esa MAC."
+        print_error "No se encontró hash para esa MAC."
         rm -f "$temp_file"
         return 1
     fi
-    print_info "Ejecutando Hashcat..."
+
     hashcat -m 22000 "$temp_file" -a 3 "$mask"
     print_success "Ataque completado (usa --show para ver resultados)."
 }
