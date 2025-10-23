@@ -32,8 +32,6 @@ Herramienta de automatización para auditorías de seguridad WiFi IEEE 802.11 qu
 # Herramientas principales
 sudo apt install hcxdumptool hcxtools hashcat
 
-# Para Python (opcional)
-python3 (>= 3.7)
 ```
 
 ### Permisos
@@ -67,21 +65,6 @@ sudo ./wifi_audit_standalone.sh analyze wlan0 captura.pcapng
 sudo ./wifi_audit_standalone.sh attack captura.hc22000 AA:BB:CC:DD:EE:FF ?d?d?d?d?d?d?d?d
 ```
 
-### Opción 3: Script Python
-
-```bash
-# Descargar el script
-chmod +x wifi_audit_tool.py
-
-# Modo interactivo
-sudo python3 wifi_audit_tool.py
-
-# Modo comando directo
-sudo python3 wifi_audit_tool.py analyze wlan0 captura.pcapng
-python3 wifi_audit_tool.py lsmac
-sudo python3 wifi_audit_tool.py attack captura.hc22000 AA:BB:CC:DD:EE:FF ?d?d?d?d?d?d?d?d
-```
-
 ## Uso
 
 ### Comandos Disponibles
@@ -98,7 +81,6 @@ analyze <interfaz> <archivo.pcapng>
 - Captura tráfico WiFi con hcxdumptool
 - Extrae handshakes EAPOL
 - Convierte a formato hashcat
-- Filtra routers TP-LINK
 - Reinicia servicios de red
 
 **Ejemplo:**
@@ -116,7 +98,7 @@ analyze wlan0 captura_oficina.pcapng
 
 **Sintaxis:**
 ```bash
-lsmac [archivo.maclist] [filtro]
+lsmac [archivo.maclist]
 ```
 
 **Descripción:**
@@ -124,7 +106,7 @@ Lista las redes capturadas con formato tabular.
 
 **Ejemplos:**
 ```bash
-# Listar todas las redes del archivo más reciente
+# Listar todas las redes de todos los archivos
 lsmac
 
 # Listar de un archivo específico
@@ -165,6 +147,9 @@ attack captura.hc22000 AA:BB:CC:DD:EE:FF ?d?d?d?d?d?d?d?d?d?d
 
 # Patrón personalizado: Capital + 4 minúsculas + 4 dígitos
 attack captura.hc22000 AA:BB:CC:DD:EE:FF ?u?l?l?l?l?d?d?d?d
+
+# Ataque con 8 dígitos cogiendo la MAC de la base de datos
+attack AA:BB:CC:DD:EE:FF ?d?d?d?d?d?d?d?d
 ```
 
 ### Máscaras de Hashcat
@@ -244,44 +229,6 @@ wifi-audit> attack auditoria_20250122.hc22000 AA:BB:CC:DD:EE:FF ?d?d?d?d?d?d?d?d
 # Ver contraseñas encontradas
 hashcat -m 22000 hash_aabbccddeeff.hc22000 --show
 ```
-
-## Mejoras y Optimizaciones Implementadas
-
-### 1. Detección Inteligente de TP-LINK
-
-El script incluye una base de datos completa de OUI (Organizationally Unique Identifier) de TP-LINK:
-
-```bash
-- 00:31:92, 00:5F:67, 10:27:F5, 14:EB:B6, 1C:61:B4
-- 20:23:51, 24:2F:D0, 28:87:BA, 30:DE:4B, 34:60:F9
-- Y más de 40 prefijos adicionales...
-```
-
-### 2. Gestión Automática de Servicios
-
-```bash
-# Antes de la captura
-systemctl stop NetworkManager
-systemctl stop wpa_supplicant
-
-# Después de la captura
-systemctl start wpa_supplicant
-systemctl start NetworkManager
-```
-
-### 3. Conversión Automática de Formatos
-
-El script maneja automáticamente:
-- Conversión de pcapng → hc22000
-- Extracción de ESSID de hexadecimal a ASCII
-- Formateo de direcciones MAC
-
-### 4. Manejo de Errores
-
-- Verificación de privilegios root
-- Validación de existencia de interfaces
-- Comprobación de dependencias
-- Manejo de interrupciones (Ctrl+C)
 
 ## Consideraciones de Seguridad
 
@@ -363,7 +310,6 @@ hashcat -m 22000 hash.hc22000 -a 0 router_passwords.txt
 proyecto/
 ├── wifi_audit_tool.sh           # Script bash interactivo
 ├── wifi_audit_standalone.sh      # Script bash comandos directos
-├── wifi_audit_tool.py            # Script Python (más robusto)
 ├── README.md                     # Esta documentación
 └── capturas/                     # Directorio para capturas
     ├── captura_20250122.pcapng
@@ -386,12 +332,6 @@ proyecto/
 - ✅ Compatible con cron/systemd
 - ✅ Menor complejidad
 
-### Python
-- ✅ Manejo robusto de errores
-- ✅ Code más mantenible
-- ✅ Type hints para claridad
-- ✅ Modo interactivo y directo
-- ⚠️ Requiere Python 3.7+
 
 ## Recursos Adicionales
 
