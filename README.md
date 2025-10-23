@@ -1,7 +1,6 @@
 
-# Create documentation file
-documentation = """# WiFi Auditing Automation Tool
-
+# WiFi Auditing Automation Tool
+---
 ## Descripción
 
 Herramienta de automatización para auditorías de seguridad WiFi IEEE 802.11 que facilita el proceso de captura, análisis y ataque a redes WiFi con contraseñas débiles, especialmente routers TP-LINK con contraseñas por defecto.
@@ -421,17 +420,4 @@ Para mejoras o reportar bugs:
 
 **Versión:** 1.0
 **Última actualización:** Octubre 2025
-**Autor:** WiFi Security Auditor
-"""
-
-with open('/tmp/README_wifi_audit.md', 'w') as f:
-    f.write(documentation)
-
-print("Documentación completa guardada en: /tmp/README_wifi_audit.md")
-print("\nContenido incluido:")
-print("- Guía de instalación completa")
-print("- Documentación de todos los comandos")
-print("- Ejemplos de uso prácticos")
-print("- Flujo de trabajo típico")
-print("- Troubleshooting común")
-print("- Consideraciones éticas y legales")
+**Autor:** Pedro José Fernández 
