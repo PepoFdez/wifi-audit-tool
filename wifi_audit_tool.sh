@@ -61,10 +61,10 @@ show_banner() {
         figlet -f slant "WiFi Audit Tool"
         echo -e "${NC}"
     else
-        echo -e "${CYAN}╔════════════════════════════════════════╗${NC}"
+        echo -e "${CYAN}╔═════════════════════════════════════════════╗${NC}"
         echo -e "${CYAN}║${WHITE}      WiFi Auditing Automation Tool v2.0${CYAN}     ║${NC}"
         echo -e "${CYAN}║${WHITE}       IEEE 802.11 Security Analysis${CYAN}         ║${NC}"
-        echo -e "${CYAN}╚════════════════════════════════════════╝${NC}"
+        echo -e "${CYAN}╚═════════════════════════════════════════════╝${NC}"
     fi
 }
 
@@ -75,7 +75,7 @@ show_help() {
     echo -e "${WHITE}"
     echo "──────────────────────────────────────────────"
     echo "   USO DE COMANDOS DISPONIBLES"
-    echo "──────────────────────────────────────────────${NC}"
+    echo "──────────────────────────────────────────────"
     echo ""
     echo -e "${YELLOW}analyze${NC} ${WHITE}<interfaz> <archivo.pcapng>${NC}"
     echo "  Captura tráfico WiFi, extrae EAPOL y genera hashcat file."
@@ -118,7 +118,7 @@ analyze() {
 
     systemctl stop NetworkManager wpa_supplicant 2>/dev/null
     hcxdumptool -i "$iface" -w "$outfile" -F --rds=1
-    systemctl restart NetworkManager wpa_supplicant 2>/dev/null
+    systemctl start NetworkManager wpa_supplicant 2>/dev/null
 
     if [[ ! -f "$outfile" ]]; then
         print_error "No se generó el archivo $outfile."
@@ -134,13 +134,55 @@ analyze() {
 # Función lsmac
 # ---------------------------
 lsmac() {
-    local file=$(ls -t *.maclist 2>/dev/null | head -n1)
-    [[ -z "$file" ]] && print_error "No se encontró .maclist" && return
-    print_info "Leyendo desde $file..."
-    printf "%-20s %-30s %-10s\n" "MAC" "SSID" "VENDOR"
-    printf "%-20s %-30s %-10s\n" "--------------------" "------------------------------" "----------"
-    cat "$file"
+    local hash_file=$(ls -t *.hc22000 2>/dev/null | head -n1)
+
+    if [[ -z "$hash_file" ]]; then
+        print_error "No se encontró ningún archivo .hc22000."
+        return 1
+    fi
+
+    print_info "Extrayendo direcciones MAC del archivo: $hash_file"
+    echo ""
+
+    # Extraer el 4º campo (MAC AP) separado por "*"
+    declare -A seen
+    local mac_list=()
+
+    while IFS='*' read -r prefix stype mac rest; do
+        # mac es el cuarto valor (campo 4)
+        [[ -z "$rest" ]] && continue
+        mac_field=$(echo "$rest" | cut -d'*' -f1)
+
+        # Asegurar formato con ':' y poner mayúsculas
+        formatted_mac=$(echo "$mac_field" | sed 's/\\(..\\)/\\1:/g' | sed 's/:$//' | tr '[:lower:]' '[:upper:]')
+
+        # Evitar duplicados
+        if [[ -n "$formatted_mac" && -z "${seen[$formatted_mac]}" ]]; then
+            seen[$formatted_mac]=1
+            mac_list+=("$formatted_mac")
+        fi
+    done < "$hash_file"
+
+    # Cabecera de tabla
+    printf "%-20s %-30s\n" "MAC ADDRESS" "VENDOR"
+    printf "%-20s %-30s\n" "--------------------" "------------------------------"
+
+    # Recorrer MACs y opcionalmente consultar fabricante
+    for mac in "${mac_list[@]}"; do
+        # Consultar vendor en macvendors.com (si hay conexión)
+        if curl -s --max-time 2 "https://api.macvendors.com/$mac" -o /tmp/vendor_response.txt; then
+            vendor=$(cat /tmp/vendor_response.txt)
+            [[ -z "$vendor" ]] && vendor="Desconocido"
+        else
+            vendor="Sin conexión"
+        fi
+
+        printf "%-20s %-30s\n" "$mac" "$vendor"
+    done
+    echo ""
+    print_success "Total de MACs encontradas: ${#mac_list[@]}"
 }
+
 
 # ---------------------------
 # Función attack
