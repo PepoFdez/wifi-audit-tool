@@ -1,7 +1,8 @@
 #!/bin/bash
+
 # =====================================================================
-# WiFi Auditing Automation Tool - v2.0 (Bash Edition)
-# Estética mejorada + prompt personalizado
+# WiFi Auditing Automation Tool - v2.1 (Bash Edition)
+# Estética mejorada + prompt personalizado + base de datos persistente
 # =====================================================================
 
 # ---------------------------
@@ -18,9 +19,9 @@ NC='\033[0m'
 # ---------------------------
 # Funciones de impresión
 # ---------------------------
-print_info()    { echo -e "${BLUE}[INFO]${NC} $1"; }
+print_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
-print_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
+print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 
 # ---------------------------
@@ -34,15 +35,13 @@ check_root() {
 }
 
 check_dependencies() {
-    local deps=(hcxdumptool hcxpcapngtool hashcat)
+    local deps=(hcxdumptool hcxpcapngtool hashcat curl)
     local missing=()
-
     for dep in "${deps[@]}"; do
         if ! command -v "$dep" &>/dev/null; then
             missing+=("$dep")
         fi
     done
-
     if [[ ${#missing[@]} -gt 0 ]]; then
         print_error "Faltan dependencias: ${missing[*]}"
         print_info "Instálalas con: sudo apt install ${missing[*]}"
@@ -51,7 +50,7 @@ check_dependencies() {
 }
 
 # ---------------------------
-# Banner de ayuda estético
+# Banner
 # ---------------------------
 show_banner() {
     clear
@@ -62,8 +61,8 @@ show_banner() {
         echo -e "${NC}"
     else
         echo -e "${CYAN}╔═════════════════════════════════════════════╗${NC}"
-        echo -e "${CYAN}║${WHITE}      WiFi Auditing Automation Tool v2.0${CYAN}     ║${NC}"
-        echo -e "${CYAN}║${WHITE}       IEEE 802.11 Security Analysis${CYAN}         ║${NC}"
+        echo -e "${CYAN}║${WHITE}     WiFi Auditing Automation Tool v2.2${CYAN}      ║${NC}"
+        echo -e "${CYAN}║${WHITE}     IEEE 802.11 Security Analysis${CYAN}           ║${NC}"
         echo -e "${CYAN}╚═════════════════════════════════════════════╝${NC}"
     fi
 }
@@ -78,31 +77,26 @@ show_help() {
     echo "──────────────────────────────────────────────"
     echo ""
     echo -e "${YELLOW}analyze${NC} ${WHITE}<interfaz> <archivo.pcapng>${NC}"
-    echo "  Captura tráfico WiFi, extrae EAPOL y genera hashcat file."
-    echo "  Ejemplo: analyze wlan0 captura.pcapng"
+    echo "  Captura tráfico WiFi, extrae EAPOL y actualiza la base de datos."
     echo ""
-    echo -e "${YELLOW}lsmac${NC}"
-    echo "  Lista las MACs y SSIDs descubiertos."
+    echo -e "${YELLOW}lsmac${NC} [${WHITE}archivo.hc22000${NC}]"
+    echo "  Lista las MACs detectadas. Si se especifica un archivo, solo analiza ese."
     echo ""
     echo -e "${YELLOW}attack${NC} ${WHITE}<mac> <máscara>${NC}"
-    echo "  Ejecuta hashcat con la máscara especificada."
-    echo "  Ejemplo: attack 00:11:22:33:44:55 ?d?d?d?d?d?d?d?d"
+    echo "  Ejecuta hashcat sobre una MAC específica."
     echo ""
-    echo -e "${YELLOW}help${NC}"
-    echo "  Muestra este menú de ayuda."
-    echo ""
-    echo -e "${YELLOW}exit${NC}"
-    echo "  Sale del programa."
-    echo ""
+    echo -e "${YELLOW}help${NC}     Muestra esta ayuda."
+    echo -e "${YELLOW}exit${NC}     Sale del programa."
     echo -e "${CYAN}──────────────────────────────────────────────${NC}"
 }
 
 # ---------------------------
-# Función analyze
+# analyze
 # ---------------------------
 analyze() {
     local iface="$1"
     local outfile="$2"
+    local dbfile="database.hc22000"
 
     if [[ -z "$iface" || -z "$outfile" ]]; then
         print_error "Uso: analyze <interfaz> <archivo.pcapng>"
@@ -115,10 +109,9 @@ analyze() {
 
     print_info "Iniciando captura con hcxdumptool en $iface..."
     print_warning "Presiona Ctrl+C para detener."
-
     systemctl stop NetworkManager wpa_supplicant 2>/dev/null
     hcxdumptool -i "$iface" -w "$outfile" -F --rds=1
-    systemctl start NetworkManager wpa_supplicant 2>/dev/null
+    systemctl restart NetworkManager wpa_supplicant 2>/dev/null
 
     if [[ ! -f "$outfile" ]]; then
         print_error "No se generó el archivo $outfile."
@@ -126,81 +119,138 @@ analyze() {
     fi
 
     print_info "Convirtiendo a formato hashcat..."
-    hcxpcapngtool -o "${outfile%.pcapng}.hc22000" "$outfile"
-    print_success "Archivo convertido: ${outfile%.pcapng}.hc22000"
-}
+    local hcfile="${outfile%.pcapng}.hc22000"
+    hcxpcapngtool -o "$hcfile" "$outfile"
 
-# ---------------------------
-# Función lsmac
-# ---------------------------
-lsmac() {
-    local hash_file=$(ls -t *.hc22000 2>/dev/null | head -n1)
-
-    if [[ -z "$hash_file" ]]; then
-        print_error "No se encontró ningún archivo .hc22000."
+    # Guardar en base de datos global
+    if [[ -f "$hcfile" ]]; then
+        print_info "Actualizando base de datos global..."
+        cat "$hcfile" >> "$dbfile"
+        sort -u "$dbfile" -o "$dbfile"
+        print_success "Base de datos actualizada: $dbfile"
+    else
+        print_error "No se generó correctamente $hcfile."
         return 1
     fi
 
-    print_info "Extrayendo direcciones MAC del archivo: $hash_file"
-    echo ""
+    print_success "Captura completada y agregada a la base de datos."
+}
 
-    # Extraer el 4º campo (MAC AP) separado por "*"
+# ---------------------------
+# Lookup vendor (con cache, fallback y local)
+# ---------------------------
+lookup_vendor() {
+    local mac="$1"
+    local cache_dir="$HOME/.wifi_audit"
+    local cache_file="$cache_dir/vendors.cache"
+    mkdir -p "$cache_dir"
+
+    local prefix=$(echo "$mac" | cut -d: -f1-3 | tr -d ':' | tr '[:lower:]' '[:upper:]')
+    local cached=$(grep -i "^$prefix;" "$cache_file" 2>/dev/null | cut -d';' -f2)
+
+    if [[ -n "$cached" ]]; then
+        echo "$cached"
+        return
+    fi
+
+    vendor=""
+
+    # API primaria: macvendors.com
+    response=$(curl -s --max-time 3 "https://api.macvendors.com/$mac")
+    if [[ "$response" == *"Too Many Requests"* || "$response" == *"<html"* || -z "$response" ]]; then
+        # API secundaria: maclookup.app
+        response2=$(curl -s --max-time 3 "https://api.maclookup.app/v2/macs/$mac/company/name")
+        if [[ -n "$response2" && "$response2" != *"error"* ]]; then
+            vendor="$response2"
+        fi
+    else
+        vendor="$response"
+    fi
+
+    # Si no hay Internet o ambas fallan, consultar base IEEE local (requiere ieee-data)
+    if [[ -z "$vendor" || "$vendor" == *"<html"* ]]; then
+        if [[ -f "/usr/share/ieee-data/oui.txt" ]]; then
+            vendor_local=$(grep -i "^$prefix" /usr/share/ieee-data/oui.txt | awk -F'\t' '{print $3}' | head -n1)
+            [[ -n "$vendor_local" ]] && vendor="$vendor_local" || vendor="Desconocido"
+        else
+            vendor="Desconocido"
+        fi
+    fi
+
+    # Guardar en cache
+    echo "$prefix;$vendor" >> "$cache_file"
+    echo "$vendor"
+}
+
+# ---------------------------
+# lsmac
+# ---------------------------
+lsmac() {
+    local file="${1:-database.hc22000}"
+
+    if [[ ! -f "$file" ]]; then
+        print_error "No se encontró el archivo $file."
+        print_info "Ejecuta analyze o pasa un .hc22000 válido."
+        return 1
+    fi
+
+    print_info "Extrayendo MACs desde: $file"
     declare -A seen
     local mac_list=()
 
-    while IFS='*' read -r prefix stype mac rest; do
-        # mac es el cuarto valor (campo 4)
-        [[ -z "$rest" ]] && continue
-        mac_field=$(echo "$rest" | cut -d'*' -f1)
-
-        # Asegurar formato con ':' y poner mayúsculas
-        formatted_mac=$(echo "$mac_field" | sed 's/\\(..\\)/\\1:/g' | sed 's/:$//' | tr '[:lower:]' '[:upper:]')
-
-        # Evitar duplicados
+    while IFS='*' read -r f1 f2 f3 f4 rest; do
+        [[ -z "$f4" ]] && continue
+        formatted_mac=$(echo "$f4" | sed 's/..../&:/g;s/:$//' | tr '[:lower:]' '[:upper:]' | sed 's/://8')
         if [[ -n "$formatted_mac" && -z "${seen[$formatted_mac]}" ]]; then
             seen[$formatted_mac]=1
             mac_list+=("$formatted_mac")
         fi
-    done < "$hash_file"
+    done < "$file"
 
-    # Cabecera de tabla
-    printf "%-20s %-30s\n" "MAC ADDRESS" "VENDOR"
-    printf "%-20s %-30s\n" "--------------------" "------------------------------"
+    if (( ${#mac_list[@]} == 0 )); then
+        print_warning "No se encontraron MACs válidas."
+        return
+    fi
 
-    # Recorrer MACs y opcionalmente consultar fabricante
+    printf "%-20s %-50s\n" "MAC ADDRESS" "VENDOR"
+    printf "%-20s %-50s\n" "--------------------" "--------------------------------------------------"
+
     for mac in "${mac_list[@]}"; do
-        # Consultar vendor en macvendors.com (si hay conexión)
-        if curl -s --max-time 2 "https://api.macvendors.com/$mac" -o /tmp/vendor_response.txt; then
-            vendor=$(cat /tmp/vendor_response.txt)
-            [[ -z "$vendor" ]] && vendor="Desconocido"
-        else
-            vendor="Sin conexión"
-        fi
-
-        printf "%-20s %-30s\n" "$mac" "$vendor"
+        vendor=$(lookup_vendor "$mac")
+        printf "%-20s %-50s\n" "$mac" "$vendor"
+        sleep 1
     done
-    echo ""
+
     print_success "Total de MACs encontradas: ${#mac_list[@]}"
 }
-
-
 # ---------------------------
-# Función attack
+# attack
 # ---------------------------
 attack() {
     local mac="$1"
     local mask="$2"
-    local hashfile=$(ls -t *.hc22000 2>/dev/null | head -n1)
+    local dbfile="database.hc22000"
 
     if [[ -z "$mac" || -z "$mask" ]]; then
         print_error "Uso: attack <mac> <máscara>"
         return 1
     fi
-    [[ -z "$hashfile" ]] && print_error "No hay archivo hc22000 disponible." && return 1
+    if [[ ! -f "$dbfile" ]]; then
+        print_error "Base de datos no encontrada: $dbfile."
+        return 1
+    fi
 
-    print_info "Seleccionando hash correspondiente a $mac..."
-    grep -i "${mac//:/}" "$hashfile" > "hash_${mac//:/}.hc22000"
-    hashcat -m 22000 "hash_${mac//:/}.hc22000" -a 3 "$mask"
+    print_info "Buscando hash correspondiente a $mac..."
+    temp_file="hash_${mac//:/}.hc22000"
+    grep -i "${mac//:/}" "$dbfile" > "$temp_file"
+    if [[ ! -s "$temp_file" ]]; then
+        print_error "No se encontró ningún hash para esa MAC."
+        rm -f "$temp_file"
+        return 1
+    fi
+    print_info "Ejecutando Hashcat..."
+    hashcat -m 22000 "$temp_file" -a 3 "$mask"
+    print_success "Ataque completado (usa --show para ver resultados)."
 }
 
 # ---------------------------
@@ -221,7 +271,7 @@ main() {
         read -e -p "$(echo -e "${PROMPT_COLOR}${PROMPT_NAME}${PROMPT_RESET} ▶ ${WHITE}")" -a cmd
         case "${cmd[0]}" in
             analyze) analyze "${cmd[1]}" "${cmd[2]}";;
-            lsmac) lsmac;;
+            lsmac) lsmac "${cmd[1]}";;
             attack) attack "${cmd[1]}" "${cmd[2]}";;
             help) show_help;;
             exit|quit) print_info "Saliendo..."; break;;
