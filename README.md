@@ -16,7 +16,7 @@ Herramienta de automatización para auditorías de seguridad WiFi IEEE 802.11 qu
 
 2. **Análisis de Redes**
    - Extracción de direcciones MAC y SSIDs
-   - Detección automática de routers TP-LINK por OUI
+   - Detección automática de fabricantes
    - Filtrado y categorización de dispositivos
 
 3. **Ataques Dirigidos**
