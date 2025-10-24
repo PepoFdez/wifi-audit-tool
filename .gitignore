@@ -1,3 +1,4 @@
 *.pcapng
 *.essid
 *.hc22000
+*.py
