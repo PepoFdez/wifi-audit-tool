@@ -112,17 +112,11 @@ if [ -f "wifi_audit_standalone.sh" ]; then
     print_success "wifi_audit_standalone.sh copiado"
 fi
 
-if [ -f "wifi_audit_tool.py" ]; then
-    cp wifi_audit_tool.py "$INSTALL_DIR/"
-    chmod +x "$INSTALL_DIR/wifi_audit_tool.py"
-    print_success "wifi_audit_tool.py copiado"
-fi
 
 # Create symbolic links
 print_info "Creando enlaces simbólicos en /usr/local/bin..."
 ln -sf "$INSTALL_DIR/wifi_audit_tool.sh" /usr/local/bin/wifi-audit
 ln -sf "$INSTALL_DIR/wifi_audit_standalone.sh" /usr/local/bin/wifi-audit-standalone
-ln -sf "$INSTALL_DIR/wifi_audit_tool.py" /usr/local/bin/wifi-audit-py
 print_success "Enlaces creados"
 
 # Create captures directory
@@ -160,12 +154,10 @@ echo ""
 echo "Comandos disponibles:"
 echo "  ${GREEN}wifi-audit${NC}            - Versión interactiva (Bash)"
 echo "  ${GREEN}wifi-audit-standalone${NC} - Versión comandos directos (Bash)"
-echo "  ${GREEN}wifi-audit-py${NC}         - Versión Python"
 echo ""
 echo "Ejemplos de uso:"
 echo "  ${YELLOW}sudo wifi-audit${NC}"
 echo "  ${YELLOW}sudo wifi-audit-standalone analyze wlan0 captura.pcapng${NC}"
-echo "  ${YELLOW}sudo wifi-audit-py analyze wlan0 captura.pcapng${NC}"
 echo ""
 echo "Directorio de capturas: ${BLUE}$CAPTURES_DIR${NC}"
 echo "Archivos de herramienta: ${BLUE}$INSTALL_DIR${NC}"
@@ -173,12 +165,3 @@ echo ""
 print_warning "Recuerda: Usar solo con autorización explícita"
 echo ""
 """
-
-with open('/tmp/install.sh', 'w') as f:
-    f.write(install_script)
-
-print("Script de instalación guardado en: /tmp/install.sh")
-print("\nPara instalar:")
-print("1. Copia todos los archivos a un directorio")
-print("2. chmod +x install.sh")
-print("3. sudo ./install.sh")
