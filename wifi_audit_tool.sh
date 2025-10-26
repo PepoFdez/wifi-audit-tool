@@ -1,12 +1,9 @@
 #!/bin/bash
 # =====================================================================
-# WiFi Auditing Automation Tool - v3.5
-# Muestra MAC + SSID + VENDOR con caché, APIs y fallback local IEEE
+# WiFi Auditing Automation Tool - v4.5
+# Añade soporte analyze -deauth <iface> <AP_MAC> <outfile>
 # =====================================================================
 
-# ---------------------------
-# Colores
-# ---------------------------
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -15,17 +12,11 @@ CYAN='\033[0;36m'
 WHITE='\033[1;37m'
 NC='\033[0m'
 
-# ---------------------------
-# Funciones de impresión
-# ---------------------------
 print_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 
-# ---------------------------
-# Verificaciones
-# ---------------------------
 check_root() {
     if [[ $EUID -ne 0 ]]; then
         print_error "Este script debe ejecutarse como root (sudo)"
@@ -34,7 +25,7 @@ check_root() {
 }
 
 check_dependencies() {
-    local deps=(hcxdumptool hcxpcapngtool hashcat curl xxd)
+    local deps=(hcxdumptool hcxpcapngtool hashcat curl xxd aireplay-ng airmon-ng)
     local missing=()
     for dep in "${deps[@]}"; do
         if ! command -v "$dep" &>/dev/null; then
@@ -48,40 +39,28 @@ check_dependencies() {
     fi
 }
 
-# ---------------------------
-# Banner
-# ---------------------------
 show_banner() {
     clear
     echo ""
-    if command -v figlet >/dev/null 2>&1; then
-        echo -e "${CYAN}"
-        figlet -f slant "WiFi Audit Tool"
-        echo -e "${NC}"
-    else
-        echo -e "${CYAN}╔═════════════════════════════════════════════╗${NC}"
-        echo -e "${CYAN}║${WHITE} WiFi Auditing Automation Tool v3.5${CYAN} ║${NC}"
-        echo -e "${CYAN}║${WHITE} IEEE 802.11 Security Analysis${CYAN}        ║${NC}"
-        echo -e "${CYAN}╚═════════════════════════════════════════════╝${NC}"
-    fi
+    echo -e "${CYAN}╔═════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║${WHITE} WiFi Auditing Automation Tool v4.5${CYAN} ║${NC}"
+    echo -e "${CYAN}║${WHITE} Auditoría Ética IEEE 802.11${CYAN}         ║${NC}"
+    echo -e "${CYAN}╚═════════════════════════════════════════════╝${NC}"
 }
 
-# ---------------------------
-# Help
-# ---------------------------
 show_help() {
     echo -e "${WHITE}"
     echo "──────────────────────────────────────────────"
     echo "   USO DE COMANDOS DISPONIBLES"
     echo "──────────────────────────────────────────────${NC}"
     echo ""
-    echo -e "${YELLOW}analyze${NC} ${WHITE}<interfaz> <archivo.pcapng>${NC}"
-    echo "  Captura tráfico WiFi y actualiza la base de datos."
+    echo -e "${YELLOW}analyze${NC} [-deauth] <interfaz> [AP_MAC] <archivo.pcapng>"
+    echo "  Captura tráfico WiFi. Si se usa '-deauth <interfaz > <AP_MAC> <archivo>', lanza una desautenticación ética"
     echo ""
-    echo -e "${YELLOW}lsmac${NC} [${WHITE}archivo.hc22000${NC}]"
-    echo "  Lista las MACs detectadas mostrando SSID y fabricante (por defecto usa database.hc22000)."
+    echo -e "${YELLOW}lsmac${NC} [archivo.hc22000]"
+    echo "  Lista las MACs detectadas mostrando SSID y fabricante."
     echo ""
-    echo -e "${YELLOW}attack${NC} ${WHITE}<mac> <máscara>${NC}"
+    echo -e "${YELLOW}attack${NC} <mac> <máscara>"
     echo "  Ejecuta hashcat sobre una MAC específica."
     echo ""
     echo -e "${YELLOW}help${NC}     Muestra esta ayuda."
@@ -89,35 +68,98 @@ show_help() {
     echo -e "${CYAN}──────────────────────────────────────────────${NC}"
 }
 
-# ---------------------------
-# analyze
-# ---------------------------
+# -------- ANALYZE (normal y con -deauth) --------
 analyze() {
-    local iface="$1"
-    local outfile="$2"
+    local mode_normal=true
+    local iface=""
+    local ap_mac=""
+    local outfile=""
     local dbfile="database.hc22000"
 
-    if [[ -z "$iface" || -z "$outfile" ]]; then
-        print_error "Uso: analyze <interfaz> <archivo.pcapng>"
-        return 1
+    if [[ "$1" == "-deauth" ]]; then
+        mode_normal=false
+        iface="$2"
+        ap_mac="$3"
+        outfile="$4"
+    else
+        iface="$1"
+        outfile="$2"
     fi
-    if ! ip link show "$iface" &>/dev/null; then
-        print_error "Interfaz no encontrada: $iface"
+
+    if [[ -z "$iface" || -z "$outfile" ]]; then
+        print_error "Uso: analyze [-deauth] <interfaz> [AP_MAC] <archivo.pcapng>"
         return 1
     fi
 
-    print_info "Iniciando captura con hcxdumptool en $iface..."
-    print_warning "Presiona Ctrl+C para detener."
+    if ! ip link show "$iface" &>/dev/null; then
+        print_error "Interfaz no válida: $iface"
+        return 1
+    fi
 
     systemctl stop NetworkManager wpa_supplicant 2>/dev/null
-    hcxdumptool -i "$iface" -w "$outfile" -F --rds=1
+    print_info "Interfaz $iface lista. Servicios detenidos."
+
+    if $mode_normal; then
+        print_info "Captura pasiva iniciada..."
+        hcxdumptool -i "$iface" -w "$outfile" -F --rds=1
+    else
+        print_warning "AVISO ÉTICO:"
+        echo "Has activado el modo -deauth. Este modo:"
+        echo "  • Fuerza desautenticaciones sobre el AP autorizado ($ap_mac)"
+        echo "  • Lanza hcxdumptool y aireplay-ng en paralelo"
+        echo ""
+        read -p "¿Confirmas autorización por escrito? (yes/no): " confirm
+        if [[ "$confirm" != "yes" ]]; then
+            print_info "Operación cancelada."
+            systemctl start NetworkManager wpa_supplicant 2>/dev/null
+            return
+        fi
+
+        # Activar modo monitor
+        print_info "Activando modo monitor en $iface..."
+        #airmon-ng start "$iface" >/dev/null 2>&1
+        local iface_mon="${iface}"
+
+        # Confirmar interfaz monitor
+        if ! iwconfig "$iface_mon" &>/dev/null; then
+            print_error "Error al activar modo monitor en $iface."
+            systemctl start NetworkManager wpa_supplicant 2>/dev/null
+            return 1
+        fi
+        print_success "Modo monitor activado: $iface_mon"
+
+        # Lanzar captura con hcxdumptool
+        print_info "Comenzando captura con hcxdumptool..."
+        hcxdumptool -i "$iface_mon" -w "$outfile" -F --rds=1 &
+        local pid_dump=$!
+
+        # Lanzar aireplay-ng
+        print_info "Desautenticando AP autorizado: $ap_mac..."
+        aireplay-ng -0 10 -a "$ap_mac" "$iface_mon" >/dev/null 2>&1 &
+        local pid_air=$!
+
+        print_info "Esperando a que las reautenticaciones se registren..."
+        sleep 20  # duración base de la desautenticación
+
+        # Detener procesos
+        kill $pid_air 2>/dev/null
+        kill $pid_dump 2>/dev/null
+        print_success "Reautenticaciones capturadas."
+
+        # Desactivar monitor mode
+        print_info "Desactivando modo monitor..."
+        #airmon-ng stop "$iface_mon" >/dev/null 2>&1
+    fi
+
     systemctl restart NetworkManager wpa_supplicant 2>/dev/null
+    print_success "Servicios de red reactivados."
 
     if [[ ! -f "$outfile" ]]; then
-        print_error "No se generó el archivo $outfile."
+        print_error "No se generó el archivo de captura."
         return 1
     fi
 
+    # Convertir a hashcat y actualizar DB
     print_info "Convirtiendo a formato hashcat..."
     local hcfile="${outfile%.pcapng}.hc22000"
     hcxpcapngtool -o "$hcfile" "$outfile"
@@ -130,9 +172,7 @@ analyze() {
     fi
 }
 
-# ---------------------------
-# Lookup vendor (API + cache + fallo local)
-# ---------------------------
+# --------- lookup_vendor y lsmac (igual) -----------
 lookup_vendor() {
     local mac="$1"
     local cache_dir="$HOME/.wifi_audit"
@@ -141,143 +181,97 @@ lookup_vendor() {
 
     local prefix=$(echo "$mac" | cut -d: -f1-3 | tr -d ':' | tr '[:lower:]' '[:upper:]')
     local cached=$(grep -i "^$prefix;" "$cache_file" 2>/dev/null | cut -d';' -f2)
+    if [[ -n "$cached" ]]; then echo "$cached"; return; fi
 
-    if [[ -n "$cached" ]]; then
-        echo "$cached"
-        return
-    fi
-
-    vendor=""
-    response=$(curl -s --max-time 3 "https://api.macvendors.com/$mac")
-    if [[ "$response" == *"Too Many Requests"* || "$response" == *"<html"* || -z "$response" ]]; then
-        response2=$(curl -s --max-time 3 "https://api.maclookup.app/v2/macs/$mac/company/name")
-        if [[ -n "$response2" && "$response2" != *"error"* ]]; then
-            vendor="$response2"
-        fi
-    else
-        vendor="$response"
-    fi
-
-    if [[ -z "$vendor" || "$vendor" == *"<html"* ]]; then
-        if [[ -f "/usr/share/ieee-data/oui.txt" ]]; then
-            vendor_local=$(grep -i "^$prefix" /usr/share/ieee-data/oui.txt | awk -F'\t' '{print $3}' | head -n1)
-            [[ -n "$vendor_local" ]] && vendor="$vendor_local" || vendor="Desconocido"
-        else
-            vendor="Desconocido"
-        fi
-    fi
+    local vendor=""
+    local response=$(curl -s --max-time 3 "https://api.macvendors.com/$mac")
+    if [[ "$response" == *"<html"* || "$response" == *"Too Many Requests"* || -z "$response" ]]; then
+        vendor="Desconocido"
+    else vendor="$response"; fi
 
     echo "$prefix;$vendor" >> "$cache_file"
     echo "$vendor"
 }
 
-# ---------------------------
-# lsmac (con SSID + Vendor)
-# ---------------------------
 lsmac() {
     local file="${1:-database.hc22000}"
-
     if [[ ! -f "$file" ]]; then
         print_error "No se encontró el archivo $file."
-        print_info "Ejecuta analyze o pasa un .hc22000 válido."
         return 1
     fi
 
-    print_info "Extrayendo MACs y SSIDs desde: $file"
+    print_info "Analizando MACs y SSIDs desde $file..."
     declare -A mac_to_ssid
     local mac_list=()
 
     while IFS='*' read -r f1 f2 f3 f4 f5 f6 rest; do
         [[ -z "$f4" ]] && continue
-        formatted_mac=$(echo "$f4" | sed 's/\\(..\\)/\\1:/g' | sed 's/:$//' | tr '[:lower:]' '[:upper:]')
-
+        local formatted_mac=$(echo "$f4" | sed 's/\(..\)/\1:/g' | sed 's/:$//' | tr '[:lower:]' '[:upper:]')
+        local essid="(oculto)"
         if [[ "$f6" =~ ^[0-9A-Fa-f]+$ ]]; then
-            essid=$(echo "$f6" | xxd -r -p 2>/dev/null)
-            [[ -z "$essid" ]] && essid="(oculto)"
-        else
-            essid="(oculto)"
+            local essid_decoded=$(echo "$f6" | xxd -r -p 2>/dev/null)
+            [[ -n "$essid_decoded" ]] && essid="$essid_decoded"
         fi
-
         if [[ -z "${mac_to_ssid[$formatted_mac]}" ]]; then
             mac_to_ssid["$formatted_mac"]="$essid"
             mac_list+=("$formatted_mac")
         fi
     done < "$file"
 
-    if (( ${#mac_list[@]} == 0 )); then
-        print_warning "No se encontraron MACs válidas."
-        return
-    fi
-
-    printf "%-20s %-30s %-50s\n" "MAC ADDRESS" "SSID" "VENDOR"
-    printf "%-20s %-30s %-50s\n" "--------------------" "------------------------------" "--------------------------------------------------"
+    printf "%-20s %-30s %-30s\n" "MAC ADDRESS" "SSID" "VENDOR"
+    printf "%-20s %-30s %-30s\n" "--------------------" "------------------------------" "------------------------------"
 
     for mac in "${mac_list[@]}"; do
-        ssid="${mac_to_ssid[$mac]}"
-        vendor=$(lookup_vendor "$mac")
-        printf "%-20s %-30s %-50s\n" "$mac" "$ssid" "$vendor"
-        sleep 1
+        local ssid="${mac_to_ssid[$mac]}"
+        local vendor=$(lookup_vendor "$mac")
+        printf "%-20s %-30s %-30s\n" "$mac" "$ssid" "$vendor"
     done
-
-    print_success "Total de redes encontradas: ${#mac_list[@]}"
 }
 
-# ---------------------------
-# attack
-# ---------------------------
+# --------- attack ----------
 attack() {
     local mac="$1"
     local mask="$2"
     local dbfile="database.hc22000"
 
-    if [[ -z "$mac" || -z "$mask" ]]; then
-        print_error "Uso: attack <mac> <máscara>"
-        return 1
-    fi
-    if [[ ! -f "$dbfile" ]]; then
-        print_error "Base de datos no encontrada: $dbfile."
-        return 1
-    fi
+    [[ -z "$mac" || -z "$mask" ]] && { print_error "Uso: attack <mac> <máscara>"; return 1; }
+    [[ ! -f "$dbfile" ]] && { print_error "Base de datos no encontrada."; return 1; }
 
-    print_info "Buscando hash correspondiente a $mac..."
-    local temp_file="hash_${mac//:/}.hc22000"
-    grep -i "${mac//:/}" "$dbfile" > "$temp_file"
+    print_info "Buscando hash de $mac..."
+    local temp="hash_${mac//:/}.hc22000"
+    grep -i "${mac//:/}" "$dbfile" > "$temp"
+    [[ ! -s "$temp" ]] && { print_error "No se encontró hash."; rm -f "$temp"; return 1; }
 
-    if [[ ! -s "$temp_file" ]]; then
-        print_error "No se encontró hash para esa MAC."
-        rm -f "$temp_file"
-        return 1
-    fi
-
-    hashcat -m 22000 "$temp_file" -a 3 "$mask"
+    hashcat -m 22000 "$temp" -a 3 "$mask"
     print_success "Ataque completado (usa --show para ver resultados)."
 }
 
-# ---------------------------
-# Interfaz interactiva
-# ---------------------------
+# -------- main ----------
 main() {
     check_root
     check_dependencies
     show_banner
     show_help
 
-    local PROMPT_COLOR="${CYAN}"
-    local PROMPT_NAME="<wifi_audit_tool>"
-    local PROMPT_RESET="${NC}"
+    HISTFILE=~/.wifi_audit_tool_history
+    [[ -f $HISTFILE ]] && history -r $HISTFILE
 
     while true; do
         echo ""
-        read -e -p "$(echo -e "${PROMPT_COLOR}${PROMPT_NAME}${PROMPT_RESET} ▶ ${WHITE}")" -a cmd
-        case "${cmd[0]}" in
-            analyze) analyze "${cmd[1]}" "${cmd[2]}";;
-            lsmac) lsmac "${cmd[1]}";;
-            attack) attack "${cmd[1]}" "${cmd[2]}";;
+        read -e -p "$(echo -e "${CYAN}<wifi_audit_tool>${NC} ▶ ${WHITE}")" cmdline
+        [[ -z "$cmdline" ]] && continue
+        history -s "$cmdline"
+        history -w $HISTFILE
+        set -- $cmdline
+        case "$1" in
+            analyze) shift; analyze "$@";;
+            lsmac) shift; lsmac "$@";;
+            attack) shift; attack "$@";;
             help) show_help;;
             exit|quit) print_info "Saliendo..."; break;;
-            *) print_error "Comando no reconocido: ${cmd[0]}";;
+            *) print_error "Comando no reconocido: $1";;
         esac
-    done
+done
 }
 
 main

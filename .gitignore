@@ -2,3 +2,5 @@
 *.essid
 *.hc22000
 *.py
+*.lst
+*.txt
