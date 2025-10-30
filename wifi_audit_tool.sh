@@ -81,6 +81,18 @@ analyze() {
         iface="$2"
         ap_mac="$3"
         outfile="$4"
+        # Detectar canal del AP objetivo 
+        print_info "Detectando canal del AP $ap_mac..."
+        local formatted_mac=$(echo "$ap_mac" | sed 's/../&:/g; s/:$//')
+        local channel=$(iw dev "$iface" scan 2>/dev/null | grep -A50 "$formatted_mac" | grep -E "primary channel|DS Parameter set: channel" | awk '{print $NF}' | head -n1)
+
+        
+        if [[ -z "$channel" ]]; then
+            print_error "No se pudo detectar el canal del AP. Verifica que el AP esté al alcance."
+            return 1
+        fi
+        
+        print_success "Canal detectado: $channel (2.4GHz)"
     else
         iface="$1"
         outfile="$2"
@@ -115,21 +127,12 @@ analyze() {
         read -p "¿Confirmas autorización por escrito? (yes/no): " confirm
         if [[ "$confirm" != "yes" ]]; then
             print_info "Operación cancelada."
+            ip link set $iface down
+            iw $iface set type managed
+            ip link set $iface up
             systemctl start NetworkManager wpa_supplicant 2>/dev/null
             return
         fi
-
-        # Detectar canal del AP objetivo
-        print_info "Detectando canal del AP $ap_mac..."
-        local channel=$(iw dev "$iface" scan 2>/dev/null | grep -A10 "$ap_mac" | grep "primary channel" | awk '{print $4}' | head -n1)
-        
-        if [[ -z "$channel" ]]; then
-            print_error "No se pudo detectar el canal del AP. Verifica que el AP esté al alcance."
-            systemctl start NetworkManager wpa_supplicant 2>/dev/null
-            return 1
-        fi
-        
-        print_success "Canal detectado: $channel (2.4GHz)"
         
         # Lanzar hcxdumptool fijado en ese canal
         print_info "Iniciando captura en canal $channel..."
