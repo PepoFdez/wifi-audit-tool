@@ -225,13 +225,14 @@ lsmac() {
         fi
     done < "$file"
 
-    printf "%-20s %-30s %-30s\n" "MAC ADDRESS" "SSID" "VENDOR"
-    printf "%-20s %-30s %-30s\n" "--------------------" "------------------------------" "------------------------------"
+    printf "%-18s  %-32s  %-30s\n" "MAC ADDRESS" "SSID" "VENDOR"
+    printf "%s\n" "=================================================================================="
 
     for mac in "${mac_list[@]}"; do
         local ssid="${mac_to_ssid[$mac]}"
         local vendor=$(lookup_vendor "$mac")
-        printf "%-20s %-30s %-30s\n" "$mac" "$ssid" "$vendor"
+        vendor=$(echo "$vendor" | tr -d '\r')
+        printf "%-18s  %-32s  %-30s\n" "$mac" "$ssid" "$vendor"
     done
 }
 
